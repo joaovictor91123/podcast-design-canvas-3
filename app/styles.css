@@ -173,6 +173,52 @@ body {
 }
 .bucket-derived { flex-basis: 100%; color: var(--ok); font-size: 12px; min-height: 14px; padding-left: 130px; }
 
+/* Riverside-style link import ---------------------------------------------- */
+.riverside-import {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+.riverside-import-label { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+.riverside-import-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.riverside-link-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 220px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.riverside-link-field input[type="url"] {
+  flex: 1;
+  min-width: 0;
+  background: #10131d;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 8px;
+  font-size: 13px;
+}
+#riverside-import-btn {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(108, 140, 255, 0.17);
+  border-color: var(--accent);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+#riverside-import-btn:hover { background: rgba(108, 140, 255, 0.3); }
+#riverside-import-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.riverside-status { color: var(--ok); font-size: 12px; margin: 6px 0 0; min-height: 14px; }
+.riverside-error { color: #ff8b8b; font-size: 12px; margin: 6px 0 0; min-height: 14px; }
+.riverside-error[hidden] { display: none; }
+
 /* Presets ----------------------------------------------------------------- */
 .presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 @media (max-width: 520px) { .presets { grid-template-columns: 1fr; } }

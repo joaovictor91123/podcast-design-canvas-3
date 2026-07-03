@@ -85,6 +85,93 @@
     });
   });
 
+  // Riverside-style link import: paste a share link that carries (or points
+  // at) each speaker's track URL and populate the same Host/Guest1/Guest2
+  // buckets uploads use, so preview/export/presets all work identically
+  // afterward. Every track is fetched and validated as a real video BEFORE
+  // any bucket is touched — a bad link (unparseable, no track URLs, a track
+  // that fails to load or isn't a video) shows a visible error and changes
+  // nothing already on the episode.
+  const RV = PDC.riverside;
+  function showRiversideError(message) {
+    const el = $("riverside-error");
+    el.textContent = message || "";
+    el.hidden = !message;
+  }
+  function setRiversideStatus(message) {
+    $("riverside-status").textContent = message || "";
+  }
+  $("riverside-import-btn").addEventListener("click", async function () {
+    const parsed = RV.parseRiversideLink($("riverside-link").value);
+    if (!parsed.ok) {
+      showRiversideError(parsed.error);
+      setRiversideStatus("");
+      return;
+    }
+    const entries = Object.keys(parsed.tracks).map(function (bucket) {
+      return [bucket, parsed.tracks[bucket]];
+    });
+    const btn = $("riverside-import-btn");
+    const prevLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Importing…";
+    try {
+      const fetched = await Promise.all(
+        entries.map(async function (entry) {
+          const bucket = entry[0];
+          const url = entry[1];
+          let response;
+          try {
+            response = await fetch(url);
+          } catch (e) {
+            throw new Error("Could not load the " + bucket + " track from that link.");
+          }
+          if (!response.ok) throw new Error("Could not load the " + bucket + " track (HTTP " + response.status + ").");
+          const blob = await response.blob();
+          const file = new File([blob], bucket + "-riverside.webm", { type: blob.type || "video/webm" });
+          if (!isVideoFile(file)) throw new Error("The " + bucket + " track link is not a supported video.");
+          return [bucket, file];
+        }),
+      );
+      // All tracks fetched and validated — now (and only now) apply them, ONE
+      // AT A TIME. Manual uploads only ever ingest one file per DOM event, so
+      // preview.setSource()'s async duration-probing (needed to resolve a
+      // MediaRecorder-sourced file's Infinity duration) has never had to cope
+      // with a second call starting before the first settles. Importing all
+      // three tracks in one tight loop hits exactly that: their probing seeks
+      // interleave and can clobber each other, leaving a video's decoder stuck.
+      // Waiting for each bucket's video to actually finish loading before
+      // ingesting the next avoids the race — bounded, so a slow decode can
+      // never hang the import.
+      function waitForSpeakerReady(bucket) {
+        return new Promise(function (resolve) {
+          const deadline = Date.now() + 4000;
+          (function poll() {
+            const v = document.querySelector('video[data-speaker="' + bucket + '"]');
+            if ((v && v.readyState >= 2 && isFinite(v.duration)) || Date.now() > deadline) return resolve();
+            setTimeout(poll, 60);
+          })();
+        });
+      }
+      for (const entry of fetched) {
+        ingestFile(entry[0], entry[1]);
+        await waitForSpeakerReady(entry[0]);
+      }
+      afterMediaChange();
+      showRiversideError("");
+      setRiversideStatus(
+        "Imported " + fetched.length + " track" + (fetched.length === 1 ? "" : "s") + " from the Riverside link.",
+      );
+      $("riverside-link").value = "";
+    } catch (err) {
+      showRiversideError((err && err.message) || "Could not import that Riverside link.");
+      setRiversideStatus("");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prevLabel;
+    }
+  });
+
   // Timed visual moments: type + text + start/end times, listed with remove
   // controls. Moments live on the episode model, so they survive preset and
   // template switches; the preview draws whichever are active each frame.
@@ -459,6 +546,9 @@
     $("caption-text").value = "";
     setCaptionStatus("");
     showCaptionError("");
+    $("riverside-link").value = "";
+    setRiversideStatus("");
+    showRiversideError("");
     renderMomentList();
 
     $("export-progress").hidden = true;
