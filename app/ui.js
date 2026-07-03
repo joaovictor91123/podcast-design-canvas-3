@@ -428,10 +428,13 @@
     }
   }
   importBtn.addEventListener("click", function () { importFromLink($("riverside-link").value); });
+  // "Use sample link" is the one-click path into a Riverside-imported episode:
+  // it fills the field AND imports immediately, rather than leaving the
+  // creator to notice and press a second, separate Import button — a link
+  // was filled in but never actually imported was exactly #204's report.
   $("riverside-use-sample").addEventListener("click", function () {
     $("riverside-link").value = $("riverside-sample-link").textContent.trim();
-    showRiversideError("");
-    setRiversideStatus("Sample link filled in — click Import from link.");
+    importFromLink($("riverside-link").value);
   });
 
   // Scrub bar: jump the shared preview timeline to any time — scheduled

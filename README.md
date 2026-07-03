@@ -97,7 +97,7 @@ A creator can go from raw synced podcast tracks and a few social links to a fini
 
 Episode setup can start from a Riverside-style episode link instead of manual uploads: paste a share link that references the synced speaker tracks (directly, or via an episode manifest) into the "Import from a Riverside-style episode link" field and click Import. Host, Guest 1, and Guest 2 populate with playable media that flows through the same preview and export pipeline as uploads.
 
-The repo's declared sample Riverside-style manifest link (also shown next to the import field in the app) is:
+The repo's declared sample Riverside-style manifest link is also shown next to the import field in the app, beside a one-click "Use sample link" button that fills the field with it and imports immediately — no separate click on Import is needed for the sample. That declared link is:
 
 ```
 https://riverside.fm/studio/pdc-sample-episode
