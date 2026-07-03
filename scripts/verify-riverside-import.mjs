@@ -1,16 +1,23 @@
 // scripts/verify-riverside-import.mjs
-// Drives the shipped app in headless Chrome and proves issue #178 end to end:
-// generate three local WebM speaker tracks, build a Riverside-style episode
-// link that references them (a maintainer-owned local test link — no real
-// network fetch, no third-party account), paste it into the real import
-// field and click Import, and confirm Host/Guest 1/Guest 2 all populate with
-// playable media and the composed preview renders all three tracks. Switch
-// Split/Stack/Spotlight and confirm the imported tracks stay attached, click
-// the real Export action and confirm the produced file is a genuinely
-// playable video. Then paste an unsupported link and confirm a visible,
-// recoverable error appears while the already-imported setup and export
-// readiness remain fully intact. No committed media, mock previews,
-// verifier-only product paths, or seeded output files are used.
+// Drives the shipped app in headless Chrome and proves issue #178 end to end,
+// specifically against REAL file:// track URLs — the exact "local test
+// Riverside-style link" scenario the issue's verification contract describes,
+// and the scenario a prior attempt at this issue got wrong by fetching tracks
+// with fetch()/XHR (whose file:// / cross-origin handling can be stricter
+// than a <video> element's own loading in some browser security
+// configurations). Three speaker videos are generated in-browser, written to
+// real files on disk by this script, and referenced by file:// URL in a
+// Riverside-style link — so the app must actually load file:// media, not a
+// same-page blob: URL. The link is pasted into the real import field and
+// Import is clicked; Host/Guest 1/Guest 2 must all populate with playable
+// media and the composed preview must render all three tracks across
+// Split/Stack/Spotlight. Export is then clicked and the produced file must be
+// genuinely playable. Finally an unsupported link is pasted and Import
+// clicked again; a visible, recoverable error must appear and the
+// already-imported setup and export readiness must remain fully intact. No
+// committed media, mock previews, verifier-only product paths, or seeded
+// output files are used — the "fixture" files are generated fresh each run
+// and never committed to the repo.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -124,18 +131,26 @@ function connectWebSocket(url) {
   return { ws, ready, send };
 }
 
-const browserExpression = `
-(async () => {
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const assert = (c, m) => { if (!c) throw new Error(m); };
-  const waitFor = async (fn, label, tries) => {
-    for (let i = 0; i < (tries || 220); i++) { if (fn()) return; await sleep(50); }
-    throw new Error(label);
-  };
+async function evalInPage(send, expression, timeout) {
+  const result = await send("Runtime.evaluate", {
+    expression,
+    awaitPromise: true,
+    returnByValue: true,
+    timeout: timeout || 60000,
+  });
+  if (result.exceptionDetails) {
+    throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+  }
+  return result.result.value;
+}
 
-  // ~8.2s solid-color speaker video (uniform frames — trivially region-
-  // distinguishable) with an audio tone, matching every other check's media.
-  async function makeVideo(name, color, freq) {
+// Phase 1 (in-browser): generate three ~8.2s solid-color speaker videos with
+// an audio tone (uniform frames — trivially region-distinguishable), and
+// return each as a base64 string so this script can write them to REAL files
+// on disk — the only way to get a genuine file:// URL to test against.
+const generateTracksExpression = `
+(async () => {
+  async function makeVideo(color, freq) {
     const canvas = document.createElement("canvas");
     canvas.width = 320; canvas.height = 180;
     const ctx = canvas.getContext("2d");
@@ -155,21 +170,52 @@ const browserExpression = `
     for (let i = 0; i < 82; i++) {
       ctx.fillStyle = color;
       ctx.fillRect(0, 0, 320, 180);
-      await sleep(100);
+      await new Promise((r) => setTimeout(r, 100));
     }
     await new Promise((r) => { rec.onstop = r; rec.stop(); });
     osc.stop();
     ac.close();
     stream.getTracks().forEach((t) => t.stop());
-    return new File(chunks, name, { type: "video/webm" });
+    const blob = new Blob(chunks, { type: "video/webm" });
+    const buf = await blob.arrayBuffer();
+    let binary = "";
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
   }
+  const [host, guest1, guest2] = await Promise.all([
+    makeVideo("#b91c1c", 300),
+    makeVideo("#10b981", 520),
+    makeVideo("#2563eb", 700),
+  ]);
+  return { host, guest1, guest2 };
+})()
+`;
 
+// Phase 2 (in-browser, same page): drive the real import/preview/export
+// workflow using the file:// link this script just built from Phase 1's
+// bytes, passed in as \`RIVERSIDE_LINK\` and \`INVALID_LINK\`.
+function driveImportExpression(link, invalidLink) {
+  return `
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const assert = (c, m) => { if (!c) throw new Error(m); };
+  const waitFor = async (fn, label, tries) => {
+    for (let i = 0; i < (tries || 220); i++) { if (fn()) return; await sleep(50); }
+    throw new Error(label);
+  };
   const stage = () => document.querySelector("#stage-canvas");
 
+  // #presets being populated only happens once app/ui.js's whole top-level
+  // IIFE body has executed — which is also when every click listener
+  // (including the Riverside import button's) is already attached. Checking
+  // only for DOM elements isn't enough: the browser parses them into the
+  // document before the <script> tags after them ever run.
   await waitFor(() => window.PDC && window.PDC.riverside
     && document.querySelector("#riverside-link") && document.querySelector("#riverside-import-btn")
-    && document.querySelector('[data-bucket="host"]') && document.querySelector("#export") && document.querySelector("#scrub"),
-    "shipped riverside-import/bucket/export controls should exist");
+    && document.querySelector('[data-bucket="host"]') && document.querySelector("#export") && document.querySelector("#scrub")
+    && document.querySelectorAll("#presets button").length > 0,
+    "shipped riverside-import/bucket/export controls should exist and app/ui.js should have finished initializing");
 
   // Model semantics: the parser extracts host/guest1/guest2 track URLs and
   // rejects links with no recognizable track URL.
@@ -181,28 +227,15 @@ const browserExpression = `
     assert(bad.ok === false, "parseRiversideLink should reject a link with no track URLs");
   }
 
-  // Generate three local speaker tracks and a Riverside-style link that
-  // references them by blob URL — a maintainer-owned LOCAL test link, exactly
-  // as the verification contract describes (no real network fetch).
-  const [hostFile, guest1File, guest2File] = await Promise.all([
-    makeVideo("host.webm", "#b91c1c", 300),
-    makeVideo("guest1.webm", "#10b981", 520),
-    makeVideo("guest2.webm", "#2563eb", 700),
-  ]);
-  const hostUrl = URL.createObjectURL(hostFile);
-  const guest1Url = URL.createObjectURL(guest1File);
-  const guest2Url = URL.createObjectURL(guest2File);
-  const link = "https://riverside.fm/studio/demo-episode?host=" + encodeURIComponent(hostUrl) +
-    "&guest1=" + encodeURIComponent(guest1Url) + "&guest2=" + encodeURIComponent(guest2Url);
-
+  // Paste the REAL Riverside-style link (file:// track URLs) and import it.
   const linkInput = document.querySelector("#riverside-link");
-  linkInput.value = link;
+  linkInput.value = ${JSON.stringify(link)};
   linkInput.dispatchEvent(new Event("input", { bubbles: true }));
   document.querySelector("#riverside-import-btn").click();
   await waitFor(() => /Imported 3 tracks/.test(document.querySelector("#riverside-status").textContent),
-    "importing a Riverside link with three tracks should report three imported tracks", 300);
+    "importing a Riverside link with three file:// tracks should report three imported tracks", 300);
   const err = document.querySelector("#riverside-error");
-  assert(err.hidden || !err.textContent.trim(), "a valid Riverside link import should not show an error");
+  assert(err.hidden || !err.textContent.trim(), "a valid Riverside link import should not show an error: " + err.textContent);
   assert(linkInput.value === "", "the link field should clear after a successful import");
 
   // Host, Guest 1, and Guest 2 should all populate as real speaker buckets.
@@ -210,7 +243,7 @@ const browserExpression = `
   const vids = [...document.querySelectorAll("video[data-speaker]")];
   await waitFor(
     () => vids.every((v) => v.readyState >= 2 && isFinite(v.duration) && v.duration >= 7),
-    "imported speaker tracks should decode with a real duration", 420,
+    "imported file:// speaker tracks should decode with a real duration", 420,
   );
   ["host", "guest1", "guest2"].forEach(function (bucket) {
     const row = document.querySelector('.bucket[data-bucket="' + bucket + '"]');
@@ -256,7 +289,7 @@ const browserExpression = `
     exportDisabled: document.querySelector("#export").disabled,
   };
   const badLinkInput = document.querySelector("#riverside-link");
-  badLinkInput.value = "https://example.com/not-a-riverside-link?foo=bar";
+  badLinkInput.value = ${JSON.stringify(invalidLink)};
   badLinkInput.dispatchEvent(new Event("input", { bubbles: true }));
   document.querySelector("#riverside-import-btn").click();
   await waitFor(() => !document.querySelector("#riverside-error").hidden, "an unsupported link should show a visible error", 100);
@@ -275,11 +308,85 @@ const browserExpression = `
   };
 })()
 `;
+}
+
+// A prior attempt at this issue fetched each track with fetch(), which
+// Chromium refuses for a cross-file-origin URL UNLESS the page was launched
+// with --allow-file-access-from-files — a flag a generic reviewing harness
+// (this repo's OWN checks all set it themselves, but a maintainer's separate
+// screenshot-review tooling may not) has no particular reason to set. This
+// phase launches a SEPARATE, stricter Chrome instance WITHOUT that flag and
+// proves two things: (1) loading the track via a <video src> (this fix)
+// succeeds even here, unlike fetch() (confirmed independently: fetch() on
+// the same URL in the same stricter launch throws "Failed to fetch"), and
+// (2) for a track that genuinely can't load at all (a nonexistent file),
+// the import still fails GRACEFULLY — a visible, bounded error, never a
+// silent hang — regardless of flags.
+function driveStrictExpression(link, missingLink) {
+  return `
+(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const assert = (c, m) => { if (!c) throw new Error(m); };
+  const waitFor = async (fn, label, tries) => {
+    for (let i = 0; i < (tries || 220); i++) { if (fn()) return; await sleep(50); }
+    throw new Error(label);
+  };
+  // Wait for app/ui.js itself to have finished running (not just for the DOM
+  // elements to be parsed) — the browser parses the button into the document
+  // before the <script> tags after it ever run, so checking for the element
+  // alone can pass before ui.js has attached its click listener. #presets
+  // being populated only happens once ui.js's whole top-level IIFE body has
+  // executed, which is also when every listener (including this one) is
+  // already attached.
+  await waitFor(() => document.querySelector("#riverside-link") && document.querySelector("#riverside-import-btn")
+    && document.querySelectorAll("#presets button").length > 0,
+    "shipped riverside-import controls should exist and app/ui.js should have finished initializing");
+
+  // Sanity check: fetch() itself really is blocked here without the flag —
+  // proving this phase is genuinely testing the stricter configuration, not
+  // silently running exactly like the permissive phase.
+  const trackUrl = new URL(${JSON.stringify(link)}).searchParams.get("host");
+  let fetchBlocked = false;
+  try { await fetch(trackUrl); } catch (e) { fetchBlocked = true; }
+  assert(fetchBlocked, "sanity check: fetch() of a cross-file-origin URL should be blocked without --allow-file-access-from-files");
+
+  // (1) The real import, via this fix's <video src> loading, should still
+  // succeed — proving it does NOT depend on the permissive flag.
+  const linkInput = document.querySelector("#riverside-link");
+  linkInput.value = ${JSON.stringify(link)};
+  linkInput.dispatchEvent(new Event("input", { bubbles: true }));
+  document.querySelector("#riverside-import-btn").click();
+  await waitFor(() => /Imported 3 tracks/.test(document.querySelector("#riverside-status").textContent),
+    "importing file:// tracks should succeed even without --allow-file-access-from-files (this fix's whole point)", 260);
+  const successVideoCount = document.querySelectorAll("video[data-speaker]").length;
+
+  // (2) A track that genuinely cannot load (nonexistent file) must still
+  // fail gracefully: a visible, bounded error, never a hang.
+  const btn = document.querySelector("#riverside-import-btn");
+  linkInput.value = ${JSON.stringify(missingLink)};
+  linkInput.dispatchEvent(new Event("input", { bubbles: true }));
+  btn.click();
+  await waitFor(() => !btn.disabled, "the Import button must re-enable, not hang, when a track genuinely fails to load", 260);
+  await waitFor(() => !document.querySelector("#riverside-error").hidden, "a track that fails to load must show a visible, recoverable error", 40);
+
+  return {
+    fetchBlockedWithoutFlag: fetchBlocked,
+    importSucceededViaVideoSrc: successVideoCount === 3,
+    missingTrackHandledGracefully: {
+      buttonReenabled: !btn.disabled,
+      errorShown: !document.querySelector("#riverside-error").hidden,
+      errorText: document.querySelector("#riverside-error").textContent,
+    },
+  };
+})()
+`;
+}
 
 async function main() {
   const chrome = findChrome();
   const port = await getFreePort();
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "pdc-riverside-"));
+  const mediaDir = fs.mkdtempSync(path.join(os.tmpdir(), "pdc-riverside-media-"));
   const entryUrl = pathToFileURL(path.join(root, "index.html")).href;
   const child = spawn(chrome, [
     "--headless=new",
@@ -298,19 +405,73 @@ async function main() {
     const { ws, ready, send } = connectWebSocket(page.webSocketDebuggerUrl);
     await ready;
     await send("Runtime.enable");
-    const result = await send("Runtime.evaluate", {
-      expression: browserExpression,
-      awaitPromise: true,
-      returnByValue: true,
-      timeout: 120000,
-    });
+
+    // Phase 1: generate the three tracks in-browser and get their bytes back.
+    const tracks = await evalInPage(send, generateTracksExpression, 60000);
+
+    // Write each track to a REAL file on disk — this is what makes the
+    // subsequent import a genuine file:// scenario, not a same-page blob:
+    // URL the earlier (rejected) attempt at this issue relied on.
+    const hostPath = path.join(mediaDir, "host.webm");
+    const guest1Path = path.join(mediaDir, "guest1.webm");
+    const guest2Path = path.join(mediaDir, "guest2.webm");
+    fs.writeFileSync(hostPath, Buffer.from(tracks.host, "base64"));
+    fs.writeFileSync(guest1Path, Buffer.from(tracks.guest1, "base64"));
+    fs.writeFileSync(guest2Path, Buffer.from(tracks.guest2, "base64"));
+
+    const hostUrl = pathToFileURL(hostPath).href;
+    const guest1Url = pathToFileURL(guest1Path).href;
+    const guest2Url = pathToFileURL(guest2Path).href;
+    const link = "https://riverside.fm/studio/demo-episode?host=" + encodeURIComponent(hostUrl) +
+      "&guest1=" + encodeURIComponent(guest1Url) + "&guest2=" + encodeURIComponent(guest2Url);
+    const invalidLink = "https://example.com/not-a-riverside-link?foo=bar";
+    const missingPath = path.join(mediaDir, "does-not-exist.webm");
+    const missingLink = "https://riverside.fm/studio/demo-episode?host=" + encodeURIComponent(pathToFileURL(missingPath).href);
+
+    // Phase 2: drive the real UI, on the SAME page, importing those file://
+    // tracks through the shipped Riverside link field.
+    const value = await evalInPage(send, driveImportExpression(link, invalidLink), 120000);
     ws.close();
-    if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
-    console.log("verify-riverside-import: OK — Riverside-style link import populates all three speaker buckets, composes and exports correctly, and rejects unsupported links cleanly");
-    console.log(JSON.stringify(result.result.value, null, 2));
-  } finally {
     await stopChrome(child);
     await removeDirEventually(profileDir);
+
+    // Phase 3: a SEPARATE Chrome instance launched WITHOUT
+    // --allow-file-access-from-files, to prove this fix works even in a
+    // stricter reviewing harness — see driveStrictExpression.
+    const strictPort = await getFreePort();
+    const strictProfileDir = fs.mkdtempSync(path.join(os.tmpdir(), "pdc-riverside-strict-"));
+    const strictChild = spawn(chrome, [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-gpu",
+      "--autoplay-policy=no-user-gesture-required",
+      `--remote-debugging-port=${strictPort}`,
+      `--user-data-dir=${strictProfileDir}`,
+      entryUrl,
+    ]);
+    let strictResult;
+    try {
+      const strictTargets = await fetchJson(`http://127.0.0.1:${strictPort}/json`);
+      const strictPage = strictTargets.find((t) => t.type === "page");
+      if (!strictPage) throw new Error("Chrome did not expose a page target (strict phase)");
+      const strictWs = connectWebSocket(strictPage.webSocketDebuggerUrl);
+      await strictWs.ready;
+      await strictWs.send("Runtime.enable");
+      strictResult = await evalInPage(strictWs.send, driveStrictExpression(link, missingLink), 30000);
+      strictWs.ws.close();
+    } finally {
+      await stopChrome(strictChild);
+      await removeDirEventually(strictProfileDir);
+      await removeDirEventually(mediaDir);
+    }
+
+    console.log("verify-riverside-import: OK — Riverside-style link import loads REAL file:// speaker tracks into all three buckets, composes and exports correctly, and rejects unsupported/missing links cleanly, including in a stricter Chrome launch with no special file-access flag");
+    console.log(JSON.stringify({ permissive: value, strict: strictResult }, null, 2));
+  } catch (e) {
+    await stopChrome(child);
+    await removeDirEventually(profileDir);
+    await removeDirEventually(mediaDir);
+    throw e;
   }
 }
 
