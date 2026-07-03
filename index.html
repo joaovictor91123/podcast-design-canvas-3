@@ -16,8 +16,28 @@
 
     <main class="layout">
       <section class="panel setup" aria-label="Episode setup">
-        <h2 class="step-title"><span class="num">1</span> Upload speaker videos</h2>
-        <p class="hint">Upload a local video for each speaker and add a social link so derived names appear in the preview. Add at least Host and Guest 1.</p>
+        <h2 class="step-title"><span class="num">1</span> Add speaker videos</h2>
+        <p class="hint">Start from a Riverside-style episode link, or upload a local video per speaker below. Add a social link so derived names appear in the preview. Add at least Host and Guest 1.</p>
+
+        <!-- Start-from-link setup path: paste a Riverside-style share link that
+             references the synced speaker tracks and Import fills the buckets.
+             Static control (never re-created by JS) so automated review can drive
+             it through the normal product workflow. -->
+        <div class="riverside-import" id="riverside-import" aria-label="Import from a Riverside link">
+          <p class="riverside-title">Import from a Riverside-style episode link</p>
+          <p class="hint">Paste a share link that references your synced speaker tracks — or an episode manifest — and Import populates Host, Guest 1, and Guest 2 for you. No manual upload needed.</p>
+          <label class="riverside-field">
+            <span>Riverside episode link</span>
+            <textarea id="riverside-link" rows="2" placeholder="https://riverside.fm/episode?manifest=… (or ?host=…&guest1=…, or track URLs one per line)" autocomplete="off" aria-label="Riverside episode link"></textarea>
+          </label>
+          <button id="riverside-import-btn" type="button" class="riverside-import-btn">Import from link</button>
+          <p class="riverside-sample hint">Sample link (imports the bundled three-speaker sample episode):<br />
+            <code id="riverside-sample-link">https://riverside.fm/studio/pdc-sample-episode</code>
+            <button id="riverside-use-sample" type="button" class="riverside-use-sample">Use sample link</button>
+          </p>
+          <p class="riverside-status" id="riverside-status" aria-live="polite"></p>
+          <p class="riverside-error" id="riverside-error" role="alert" hidden></p>
+        </div>
 
         <!-- Static bucket controls (never re-created by JS) so automated review can
              attach files and type social links through the normal product workflow. -->
@@ -175,6 +195,8 @@
 
     <script src="app/presets.js"></script>
     <script src="app/episode.js"></script>
+    <script src="app/riverside.js"></script>
+    <script src="app/riverside-sample.js"></script>
     <script src="app/moments.js"></script>
     <script src="app/moment-images.js"></script>
     <script src="app/captions.js"></script>

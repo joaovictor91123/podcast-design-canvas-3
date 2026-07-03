@@ -274,6 +274,166 @@
     applyCaptionText(text, "pasted text");
   });
 
+  // Riverside-style link import: parse the pasted share link (or its manifest
+  // reference) into speaker track URLs, load each into a File, and feed it
+  // through the SAME ingest path manual uploads use — so imported tracks drive
+  // the existing preview/export flow with no separate code path. An invalid or
+  // unsupported link only shows a recoverable error and never wipes existing
+  // media, social links, or setup, because the buckets are mutated only after at
+  // least one track has actually loaded.
+  const RV = PDC.riverside;
+  const importBtn = $("riverside-import-btn");
+  function showRiversideError(message) {
+    const el = $("riverside-error");
+    el.textContent = message || "";
+    el.hidden = !message;
+  }
+  function setRiversideStatus(message) {
+    $("riverside-status").textContent = message || "";
+  }
+  // Over file:// (double-clicked index.html, or a file://-driven review
+  // harness), fetch() of local resources is flag/version-dependent — so failed
+  // fetches fall back to XMLHttpRequest, and track loading falls back further to
+  // a direct <video src> (loadTrack below), which browsers always allow.
+  function xhrLoad(url, responseType) {
+    return new Promise(function (resolve, reject) {
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.open("GET", url, true);
+        xhr.responseType = responseType;
+        xhr.onload = function () {
+          const ok = xhr.status === 200 || (xhr.status === 0 && xhr.response);
+          if (ok) resolve(xhr.response);
+          else reject(new Error("HTTP " + xhr.status));
+        };
+        xhr.onerror = function () { reject(new Error("could not read " + url)); };
+        xhr.send();
+      } catch (e) { reject(e); }
+    });
+  }
+  async function loadResourceText(url) {
+    try {
+      const resp = await fetch(url);
+      if (resp && resp.ok) return await resp.text();
+      throw new Error("HTTP " + (resp && resp.status));
+    } catch (e) {
+      return String((await xhrLoad(url, "text")) || "");
+    }
+  }
+  // Load one track into a File (fetch, then XHR). Track values reaching here are
+  // local-only by construction — app-relative fixture paths, in-session blob:
+  // object URLs, or self-contained data:video URLs (app/riverside.js rejects
+  // remote media URLs, per #195's no-network deferral) — so neither call can
+  // reach the network beyond the app's own origin. When neither can READ the
+  // bytes (file:// without local-file access) return the URL itself so the
+  // preview's <video> element — which CAN load it as a media subresource —
+  // still plays the imported track.
+  async function loadTrack(track) {
+    // On a plain file:// page Chromium CORS-blocks local fetch/XHR reads (and
+    // logs a console error per attempt); a relative track can only load as a
+    // media subresource there, so go straight to the <video src> path.
+    if (window.location.protocol === "file:" && !/^(blob|data):/i.test(track.url)) {
+      return { directUrl: track.url };
+    }
+    try {
+      const resp = await fetch(track.url);
+      if (resp && resp.ok) {
+        const blob = await resp.blob();
+        if (blob && blob.size) return { file: new File([blob], track.name, { type: blob.type || "video/webm" }) };
+      }
+    } catch (e) { /* fall through */ }
+    try {
+      const buf = await xhrLoad(track.url, "arraybuffer");
+      if (buf && buf.byteLength) return { file: new File([buf], track.name, { type: "video/webm" }) };
+    } catch (e) { /* fall through */ }
+    // blob:/data: urls are only readable via fetch — if that failed they are dead.
+    if (/^(blob|data):/i.test(track.url)) return null;
+    return { directUrl: track.url };
+  }
+  // Direct-src ingest: same episode/model bookkeeping as ingestFile, but the
+  // preview <video> loads the URL itself instead of an object URL.
+  function ingestUrl(bucket, url, name) {
+    assignMedia(episode, bucket, { name: name, size: 0, type: "video/webm" });
+    preview.setSourceUrl(bucket, url);
+    updateBucketRow(bucket);
+    return true;
+  }
+  async function resolveLinkToTracks(rawText) {
+    const parsed = RV.parseEpisodeLink(rawText);
+    if (!parsed.ok) return parsed;
+    if (!parsed.manifestRef) return parsed;
+    // The link points at an episode manifest: load its text and parse THAT.
+    let manifestText;
+    try {
+      manifestText = await loadResourceText(parsed.manifestRef);
+    } catch (e) {
+      return { ok: false, error: "Could not read the episode manifest at " + parsed.manifestRef + " — check the link and try again." };
+    }
+    const inner = RV.parseEpisodeLink(manifestText);
+    if (!inner.ok) return inner;
+    if (inner.manifestRef && !inner.tracks.length) {
+      return { ok: false, error: "That manifest points at another manifest — link the speaker tracks directly." };
+    }
+    return inner;
+  }
+  async function importFromLink(rawText) {
+    importBtn.disabled = true;
+    try {
+      const parsed = await resolveLinkToTracks(rawText);
+      if (!parsed.ok) {
+        showRiversideError(parsed.error);
+        setRiversideStatus("");
+        return;
+      }
+      showRiversideError("");
+      setRiversideStatus("Importing " + parsed.tracks.length + " speaker track" + (parsed.tracks.length === 1 ? "" : "s") + "…");
+      // Load every referenced track first; only touch the episode once we know
+      // which ones actually loaded, so a broken link leaves setup intact.
+      const loaded = [];
+      for (const track of parsed.tracks) {
+        const result = await loadTrack(track);
+        if (result) loaded.push({ bucket: track.bucket, name: track.name, file: result.file, directUrl: result.directUrl });
+      }
+      if (!loaded.length) {
+        showRiversideError("Could not load any speaker tracks from that link — check the link and try again.");
+        setRiversideStatus("");
+        return;
+      }
+      loaded.forEach(function (item) {
+        item.skipped = item.file ? !ingestFile(item.bucket, item.file) : !ingestUrl(item.bucket, item.directUrl, item.name);
+        // Reflect the imported file in the bucket's own upload control too, so
+        // the manual file input visibly reads as filled (not "no file") after a
+        // link import. Best-effort — a bucket filled via directUrl has no File.
+        if (!item.skipped && item.file) {
+          try {
+            const input = document.querySelector('input[data-file-bucket="' + item.bucket + '"]');
+            const dt = new DataTransfer();
+            dt.items.add(item.file);
+            input.files = dt.files;
+          } catch (e) { /* cosmetic only — the bucket status row already shows the name */ }
+        }
+      });
+      const applied = loaded.filter(function (item) { return !item.skipped; });
+      if (!applied.length) {
+        showRiversideError("That link's tracks are not playable speaker videos.");
+        setRiversideStatus("");
+        return;
+      }
+      SPEAKER_BUCKETS.forEach(updateBucketRow);
+      afterMediaChange();
+      const names = applied.map(function (item) { return BUCKET_LABELS[item.bucket] || item.bucket; }).join(", ");
+      setRiversideStatus("Imported " + applied.length + " speaker track" + (applied.length === 1 ? "" : "s") + " (" + names + ") from the link — preview is ready.");
+    } finally {
+      importBtn.disabled = false;
+    }
+  }
+  importBtn.addEventListener("click", function () { importFromLink($("riverside-link").value); });
+  $("riverside-use-sample").addEventListener("click", function () {
+    $("riverside-link").value = $("riverside-sample-link").textContent.trim();
+    showRiversideError("");
+    setRiversideStatus("Sample link filled in — click Import from link.");
+  });
+
   // Scrub bar: jump the shared preview timeline to any time — scheduled
   // moments show or hide immediately to match the scrubbed position.
   const scrubEl = $("scrub");
@@ -459,6 +619,9 @@
     $("caption-text").value = "";
     setCaptionStatus("");
     showCaptionError("");
+    $("riverside-link").value = "";
+    setRiversideStatus("");
+    showRiversideError("");
     renderMomentList();
 
     $("export-progress").hidden = true;

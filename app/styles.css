@@ -123,6 +123,47 @@ body {
 .uploader-sub { color: var(--muted); font-size: 12px; }
 
 /* Speaker buckets --------------------------------------------------------- */
+/* Start-from-link (Riverside-style) import ------------------------------- */
+.riverside-import {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(108, 140, 255, 0.08), var(--panel-2));
+  margin-bottom: 14px;
+}
+.riverside-title { font-weight: 700; font-size: 14px; margin: 0 0 4px; }
+.riverside-import .hint { margin-bottom: 10px; }
+.riverside-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.riverside-field span { font-size: 12px; color: var(--muted); }
+.riverside-field input, .riverside-field textarea {
+  width: 100%; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: #0c1120; color: var(--ink);
+  font-size: 13px; font-family: inherit; resize: vertical;
+}
+.riverside-field input:focus, .riverside-field textarea:focus { outline: none; border-color: var(--accent); }
+.riverside-import-btn {
+  padding: 8px 14px; border-radius: 8px; border: 1px solid transparent;
+  background: var(--accent); color: #06122b; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.riverside-import-btn:hover { filter: brightness(1.06); }
+.riverside-import-btn:disabled { opacity: 0.55; cursor: default; }
+.riverside-sample { margin: 10px 0 0; }
+.riverside-sample code {
+  display: inline-block; max-width: 100%; overflow-wrap: anywhere;
+  padding: 3px 6px; margin: 4px 6px 0 0; border-radius: 6px;
+  background: #0c1120; border: 1px solid var(--line);
+  font-size: 11px; color: var(--ink); user-select: all;
+}
+.riverside-use-sample {
+  padding: 4px 9px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--ink); font-size: 12px; cursor: pointer;
+  vertical-align: bottom;
+}
+.riverside-use-sample:hover { border-color: var(--accent); }
+.riverside-status { color: var(--ok); font-size: 12px; margin: 8px 0 0; min-height: 14px; }
+.riverside-error { color: #ff8b8b; font-size: 12px; margin: 8px 0 0; min-height: 14px; }
+.riverside-error[hidden] { display: none; }
+
 .buckets { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .bucket {
   display: flex;

@@ -17,10 +17,11 @@
   }
 
   // The preview keeps its decoding <video> elements tagged with data-speaker.
+  // Uploaded speakers carry blob: sources; link-imported speakers may load their
+  // track URL directly (file://, https, data:) — every sourced speaker element
+  // must be captured, so filter only on having a source at all.
   function speakerVideos() {
-    return [...document.querySelectorAll("video[data-speaker]")].filter(
-      (v) => v.src && v.src.indexOf("blob:") === 0,
-    );
+    return [...document.querySelectorAll("video[data-speaker]")].filter((v) => !!v.src);
   }
 
   // A media element accepts only ONE createMediaElementSource() for its whole

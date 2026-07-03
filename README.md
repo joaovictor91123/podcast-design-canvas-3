@@ -93,6 +93,18 @@ A creator can go from raw synced podcast tracks and a few social links to a fini
 - Close technically correct PRs when they solve the wrong problem or move the product away from the captured vision.
 - If a PR is promising but messy, explain the clean smaller PR that should be submitted next.
 
+## Riverside-Style Link Import
+
+Episode setup can start from a Riverside-style episode link instead of manual uploads: paste a share link that references the synced speaker tracks (directly, or via an episode manifest) into the "Import from a Riverside-style episode link" field and click Import. Host, Guest 1, and Guest 2 populate with playable media that flows through the same preview and export pipeline as uploads.
+
+The repo's declared sample Riverside-style manifest link (also shown next to the import field in the app) is:
+
+```
+https://riverside.fm/studio/pdc-sample-episode
+```
+
+Its episode id resolves to the bundled sample episode in `app/riverside-sample.js` — three real synced VP8/opus WebM speaker tracks (animated speaker cards with motion, name tags, running timecode, and distinct audio tones), embedded as self-contained `data:video/webm` URLs. Resolving the sample therefore performs **no file or network reads at all**: it imports identically over `http(s)`, `file://` with local-file access, and plain `file://` (where Chromium CORS-blocks local fetches), with a clean console. Regenerate the sample with `node scripts/make-riverside-fixtures.mjs`. Links may also reference an episode manifest `.json` path or name tracks directly. Real Riverside network integration and account sign-in are intentionally deferred: the importer never fetches remote media — only app-relative paths, in-session `blob:` object URLs, and self-contained `data:` video URLs are importable, and the wrapping share URL is parsed as text, never requested.
+
 ## Scoring Labels
 
 This repo does not require Gittensor scoring labels on merged PRs. The registry uses `default_label_multiplier: 1.0`, so accepted merged PRs score without a `gittensor:*` label.

@@ -19,8 +19,15 @@
     let episodeRef = null;
     let referenceTime = 0;
 
+    // Videos flagged data-probing are mid duration-probe (normalizeDuration's
+    // bounded seek toward the end). Their currentTime is a probe artifact, so
+    // the shared timeline must neither read it nor overwrite it — otherwise one
+    // loading speaker can drag every other speaker to its end and wedge there
+    // (three tracks arriving in rapid succession from link import hit exactly
+    // that race; the probe finishes and re-joins the timeline below).
     function syncReferenceTime() {
       const times = Object.values(videos)
+        .filter((video) => !video.dataset.probing)
         .map((video) => video.currentTime)
         .filter((time) => Number.isFinite(time))
         .filter((time) => time > 0);
@@ -33,6 +40,7 @@
     function seekAll(time) {
       if (!Number.isFinite(time)) return;
       Object.values(videos).forEach((video) => {
+        if (video.dataset.probing) return; // rejoins the timeline after its probe
         try {
           video.currentTime = time;
         } catch (error) {
@@ -100,10 +108,24 @@
     }
 
     function setSource(bucket, file) {
+      return applySource(bucket, URL.createObjectURL(file), true);
+    }
+
+    // Same pipeline as setSource, but the <video> loads the URL directly instead
+    // of an object URL — used by link import when running over file://, where
+    // fetch/XHR cannot read local track bytes but a media subresource load can.
+    function setSourceUrl(bucket, url) {
+      return applySource(bucket, url, false);
+    }
+
+    function applySource(bucket, url, isObjectUrl) {
       const v = ensureVideo(bucket);
       if (v.dataset.objectUrl) URL.revokeObjectURL(v.dataset.objectUrl);
-      const url = URL.createObjectURL(file);
-      v.dataset.objectUrl = url;
+      if (isObjectUrl) v.dataset.objectUrl = url;
+      else delete v.dataset.objectUrl;
+      // Keep this video off the shared timeline until its duration probe is done
+      // — see syncReferenceTime/seekAll. Cleared in the continuation below.
+      v.dataset.probing = "1";
       v.src = url;
       v.load();
       v.addEventListener(
@@ -111,12 +133,16 @@
         function seekFirstFrame() {
           v.removeEventListener("loadeddata", seekFirstFrame);
           normalizeDuration(v, function () {
+            delete v.dataset.probing;
+            // Join the shared timeline wherever the other speakers currently are
+            // (0 when nothing is playing yet), regardless of where the duration
+            // probe happened to leave this element.
+            const t = Math.max(0, syncReferenceTime());
             try {
-              if (v.currentTime === 0) v.currentTime = Math.max(0, referenceTime);
+              v.currentTime = t;
             } catch (e) {
               /* not seekable yet */
             }
-            alignPlayback(referenceTime);
             drawFrame();
             if (playing) {
               const p = v.play();
@@ -432,6 +458,7 @@
 
     return {
       setSource,
+      setSourceUrl,
       clear,
       render,
       play,
