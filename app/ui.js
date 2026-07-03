@@ -85,6 +85,154 @@
     });
   });
 
+  // Riverside-style link import: paste a share link (or the repo's declared
+  // sample fixture manifest — see app/riverside-sample.js) that carries each
+  // speaker's track and populate the same Host/Guest1/Guest2 buckets uploads
+  // use, so preview/export/presets all work identically afterward. Tracks are
+  // loaded directly via a <video src> probe — the same native loading path
+  // every uploaded video already goes through — rather than fetch()/XHR,
+  // whose file:// / cross-origin scheme handling is stricter than <video>
+  // loading in some browser security configurations. Every track is probed
+  // and confirmed loadable BEFORE any bucket is touched — a bad link
+  // (unparseable, no track URLs, a track that fails to load) shows a visible
+  // error, bounded so it can never hang, and changes nothing already on the
+  // episode.
+  const RV = PDC.riverside;
+  function showRiversideError(message) {
+    const el = $("riverside-error");
+    el.textContent = message || "";
+    el.hidden = !message;
+  }
+  function setRiversideStatus(message) {
+    $("riverside-status").textContent = message || "";
+  }
+  if (PDC.riversideSample && $("riverside-sample-btn")) {
+    $("riverside-sample-btn").addEventListener("click", function () {
+      const linkInput = $("riverside-link");
+      linkInput.value = PDC.riversideSample.LINK;
+      linkInput.dispatchEvent(new Event("input", { bubbles: true }));
+      showRiversideError("");
+      setRiversideStatus("");
+    });
+  }
+  // Resolves true/false — never rejects, never hangs (bounded) — for whether
+  // a URL loads as real, playable video, using a scratch <video> so a failed
+  // probe never touches the actual speaker buckets.
+  function probeVideoUrl(url, timeoutMs) {
+    return new Promise(function (resolve) {
+      const v = document.createElement("video");
+      v.muted = true;
+      v.preload = "metadata";
+      let done = false;
+      function finish(ok) {
+        if (done) return;
+        done = true;
+        v.removeEventListener("loadedmetadata", onOk);
+        v.removeEventListener("error", onErr);
+        resolve(ok);
+      }
+      function onOk() {
+        finish(true);
+      }
+      function onErr() {
+        finish(false);
+      }
+      v.addEventListener("loadedmetadata", onOk);
+      v.addEventListener("error", onErr);
+      setTimeout(function () {
+        finish(false);
+      }, timeoutMs || 8000);
+      try {
+        v.src = url;
+        v.load();
+      } catch (e) {
+        finish(false);
+      }
+    });
+  }
+  // Assigns a Riverside-imported track to a bucket by URL — mirrors
+  // ingestFile() but sources the speaker video directly from the track URL
+  // (preview.setSourceFromUrl) instead of a local File, since the bytes were
+  // never fetched into the page.
+  function ingestTrackUrl(bucket, url) {
+    let name = bucket + "-riverside";
+    try {
+      if (url.indexOf("data:") !== 0) {
+        const last = new URL(url, window.location.href).pathname.split("/").filter(Boolean).pop();
+        if (last) name = decodeURIComponent(last);
+      }
+    } catch (e) {
+      /* keep the fallback name */
+    }
+    assignMedia(episode, bucket, { name: name, size: 0, type: "video/*" });
+    preview.setSourceFromUrl(bucket, url);
+    updateBucketRow(bucket);
+  }
+  // Manual uploads only ever ingest one file per DOM event, so
+  // preview.setSource()'s async duration-probing (needed to resolve a
+  // MediaRecorder-sourced file's Infinity duration) has never had to cope
+  // with a second call starting before the first settles. Importing several
+  // tracks in one tight loop hits exactly that: their probing seeks
+  // interleave and can clobber each other, leaving a video's decoder stuck.
+  // Waiting for each bucket's video to actually finish loading before
+  // ingesting the next avoids the race — bounded, so a slow decode can never
+  // hang the import.
+  function waitForSpeakerReady(bucket) {
+    return new Promise(function (resolve) {
+      const deadline = Date.now() + 4000;
+      (function poll() {
+        const v = document.querySelector('video[data-speaker="' + bucket + '"]');
+        if ((v && v.readyState >= 2 && isFinite(v.duration)) || Date.now() > deadline) return resolve();
+        setTimeout(poll, 60);
+      })();
+    });
+  }
+  $("riverside-import-btn").addEventListener("click", async function () {
+    const parsed = RV.parseRiversideLink($("riverside-link").value);
+    if (!parsed.ok) {
+      showRiversideError(parsed.error);
+      setRiversideStatus("");
+      return;
+    }
+    const entries = Object.keys(parsed.tracks).map(function (bucket) {
+      return [bucket, parsed.tracks[bucket]];
+    });
+    const btn = $("riverside-import-btn");
+    const prevLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Importing…";
+    try {
+      const probed = await Promise.all(
+        entries.map(async function (entry) {
+          const ok = await probeVideoUrl(entry[1]);
+          return { bucket: entry[0], url: entry[1], ok: ok };
+        }),
+      );
+      const failed = probed.find(function (p) {
+        return !p.ok;
+      });
+      if (failed) throw new Error("Could not load the " + failed.bucket + " track from that link.");
+      // All tracks probed successfully — now (and only now) apply them, one
+      // bucket at a time (see waitForSpeakerReady for why).
+      for (const p of probed) {
+        ingestTrackUrl(p.bucket, p.url);
+        await waitForSpeakerReady(p.bucket);
+      }
+      afterMediaChange();
+      showRiversideError("");
+      setRiversideStatus(
+        "Imported " + probed.length + " track" + (probed.length === 1 ? "" : "s") + " from the Riverside link.",
+      );
+      $("riverside-link").value = "";
+    } catch (err) {
+      showRiversideError((err && err.message) || "Could not import that Riverside link.");
+      setRiversideStatus("");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prevLabel;
+    }
+  });
+
   // Timed visual moments: type + text + start/end times, listed with remove
   // controls. Moments live on the episode model, so they survive preset and
   // template switches; the preview draws whichever are active each frame.
@@ -459,6 +607,9 @@
     $("caption-text").value = "";
     setCaptionStatus("");
     showCaptionError("");
+    $("riverside-link").value = "";
+    setRiversideStatus("");
+    showRiversideError("");
     renderMomentList();
 
     $("export-progress").hidden = true;

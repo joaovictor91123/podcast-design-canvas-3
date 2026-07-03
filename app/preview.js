@@ -99,12 +99,10 @@
       }
     }
 
-    function setSource(bucket, file) {
-      const v = ensureVideo(bucket);
-      if (v.dataset.objectUrl) URL.revokeObjectURL(v.dataset.objectUrl);
-      const url = URL.createObjectURL(file);
-      v.dataset.objectUrl = url;
-      v.src = url;
+    // Shared "a speaker video's src just changed" wiring: wait for the first
+    // decoded frame, resolve a real duration, align it onto the shared
+    // timeline, and resume playback if the preview is already running.
+    function wireVideoLoad(v) {
       v.load();
       v.addEventListener(
         "loadeddata",
@@ -126,6 +124,35 @@
         },
         { once: true },
       );
+    }
+
+    function setSource(bucket, file) {
+      const v = ensureVideo(bucket);
+      if (v.dataset.objectUrl) URL.revokeObjectURL(v.dataset.objectUrl);
+      const url = URL.createObjectURL(file);
+      v.dataset.objectUrl = url;
+      v.src = url;
+      wireVideoLoad(v);
+      return v;
+    }
+
+    // Sets a speaker's video directly from a URL (http(s)/file/blob/data)
+    // instead of a local File/Blob — used by Riverside-style link import,
+    // where the track is already reachable by URL (often a self-contained
+    // data: URI from a fixture manifest) and doesn't need to be fetched into
+    // bytes first. This lets the browser's native <video> loading handle any
+    // cross-origin/file access itself, the same mechanism every uploaded
+    // video already relies on, instead of going through fetch()/XHR — whose
+    // scheme restrictions can be stricter than a <video src> load in some
+    // browser security configurations.
+    function setSourceFromUrl(bucket, url) {
+      const v = ensureVideo(bucket);
+      if (v.dataset.objectUrl) {
+        URL.revokeObjectURL(v.dataset.objectUrl);
+        delete v.dataset.objectUrl;
+      }
+      v.src = url;
+      wireVideoLoad(v);
       return v;
     }
 
@@ -432,6 +459,7 @@
 
     return {
       setSource,
+      setSourceFromUrl,
       clear,
       render,
       play,
