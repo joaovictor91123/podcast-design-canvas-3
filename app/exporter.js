@@ -19,7 +19,7 @@
   // The preview keeps its decoding <video> elements tagged with data-speaker.
   function speakerVideos() {
     return [...document.querySelectorAll("video[data-speaker]")].filter(
-      (v) => v.src && v.src.indexOf("blob:") === 0,
+      (v) => v.src && (v.src.indexOf("blob:") === 0 || v.src.indexOf("data:video/") === 0),
     );
   }
 

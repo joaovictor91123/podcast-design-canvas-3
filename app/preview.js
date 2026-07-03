@@ -136,6 +136,22 @@
       return v;
     }
 
+    function objectUrlFromDataVideo(url) {
+      const match = String(url || "").match(/^data:(video\/[^;,]+)(;base64)?,(.*)$/i);
+      if (!match) return "";
+      const mimeType = match[1];
+      const payload = match[3] || "";
+      let bytes;
+      if (match[2]) {
+        const decoded = atob(payload);
+        bytes = new Uint8Array(decoded.length);
+        for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i);
+      } else {
+        bytes = new TextEncoder().encode(decodeURIComponent(payload));
+      }
+      return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+    }
+
     // Sets a speaker's video directly from a URL (http(s)/file/blob/data)
     // instead of a local File/Blob — used by Riverside-style link import,
     // where the track is already reachable by URL (often a self-contained
@@ -151,7 +167,13 @@
         URL.revokeObjectURL(v.dataset.objectUrl);
         delete v.dataset.objectUrl;
       }
-      v.src = url;
+      const objectUrl = objectUrlFromDataVideo(url);
+      if (objectUrl) {
+        v.dataset.objectUrl = objectUrl;
+        v.src = objectUrl;
+      } else {
+        v.src = url;
+      }
       wireVideoLoad(v);
       return v;
     }
