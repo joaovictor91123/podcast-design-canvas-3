@@ -2,7 +2,7 @@
 (function () {
   const PDC = window.PDC;
   const { PRESETS, BUCKET_LABELS, SPEAKER_BUCKETS } = PDC.presets;
-  const { createEpisode, assignMedia, clearMedia, assignedBuckets, setPreset, setSocialLink, speakerName, canCompose, readinessReason, setAudioQuality, getAudioQuality } = PDC.episode;
+  const { createEpisode, assignMedia, clearMedia, assignedBuckets, setPreset, setSocialLink, getSocialLink, speakerName, canCompose, readinessReason, setAudioQuality, getAudioQuality } = PDC.episode;
 
   const $ = function (id) {
     return document.getElementById(id);
@@ -223,8 +223,14 @@
       reader.readAsText(file);
     });
   }
+  // Speaker names actually derived from a social link the creator entered
+  // (not the Host/Guest fallback labels) — the names caption text should be
+  // corrected toward when it contains a close misspelling of one of them.
+  function speakerCorrectionNames() {
+    return SPEAKER_BUCKETS.filter(function (b) { return getSocialLink(episode, b); }).map(function (b) { return speakerName(episode, b); });
+  }
   function applyCaptionText(text, sourceLabel) {
-    const result = C.importCaptionMoments(episode, text);
+    const result = C.importCaptionMoments(episode, text, speakerCorrectionNames());
     if (!result.ok) {
       showCaptionError(result.error);
       setCaptionStatus("");

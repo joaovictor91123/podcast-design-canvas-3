@@ -140,3 +140,49 @@ test("resetEpisode clears imported caption moments", () => {
   E.resetEpisode(ep, { title: "fresh" });
   assert.equal(C.captionMoments(ep).length, 0);
 });
+
+test("correctNames fixes a close misspelling of a known name", () => {
+  assert.equal(C.correctNames("Hi Marcuss, welcome!", ["Marcus"]), "Hi Marcus, welcome!");
+  assert.equal(C.correctNames("Sara said hello", ["Sarah"]), "Sarah said hello");
+});
+
+test("correctNames leaves an exact match (any case) untouched", () => {
+  assert.equal(C.correctNames("marcus said hi", ["Marcus"]), "marcus said hi");
+  assert.equal(C.correctNames("MARCUS said hi", ["Marcus"]), "MARCUS said hi");
+});
+
+test("correctNames leaves unrelated words alone, including short ones", () => {
+  const text = "The cat sat on the mat and Marcus left.";
+  assert.equal(C.correctNames(text, ["Marcus"]), text);
+});
+
+test("correctNames does nothing when there are no correction names", () => {
+  assert.equal(C.correctNames("Marcuss said hi", []), "Marcuss said hi");
+  assert.equal(C.correctNames("Marcuss said hi", null), "Marcuss said hi");
+});
+
+test("correctNames picks the closest of several candidate names", () => {
+  assert.equal(C.correctNames("Marcuss and Sara talked", ["Marcus", "Sarah"]), "Marcus and Sarah talked");
+});
+
+test("importCaptionMoments corrects close misspellings of the given speaker names", () => {
+  const ep = E.createEpisode({});
+  const vtt = [
+    "WEBVTT",
+    "",
+    "00:00:00.000 --> 00:00:03.000",
+    "Welcome back, Marcuss and Sara!",
+    "",
+  ].join("\n");
+  const result = C.importCaptionMoments(ep, vtt, ["Marcus", "Sarah"]);
+  assert.equal(result.ok, true);
+  const caps = C.captionMoments(ep);
+  assert.equal(caps[0].text, "Welcome back, Marcus and Sarah!");
+});
+
+test("importCaptionMoments without correction names leaves caption text as transcribed", () => {
+  const ep = E.createEpisode({});
+  const vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHi Marcuss\n";
+  C.importCaptionMoments(ep, vtt);
+  assert.equal(C.captionMoments(ep)[0].text, "Hi Marcuss");
+});

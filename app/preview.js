@@ -369,16 +369,36 @@
       });
     }
 
+    // Restarting after the preview was left seeked far from 0 (e.g. adding a
+    // title/callout moment jumps the timeline into its range to preview it
+    // immediately) needs the seek-to-0 to actually land before play() is
+    // called — issuing play() while a big seek is still in flight can leave a
+    // MediaRecorder-sourced video decoder stuck (readyState never advances
+    // past HAVE_CURRENT_DATA, currentTime frozen). Every wait is
+    // HARD-BOUNDED so a stuck seek can never wedge restart.
     function restart() {
       referenceTime = 0;
-      Object.keys(videos).forEach(function (b) {
-        try {
-          videos[b].currentTime = 0;
-        } catch (e) {
-          /* not seekable yet */
-        }
-      });
-      play();
+      const vids = Object.values(videos);
+      Promise.all(
+        vids.map(function (v) {
+          return new Promise(function (resolve) {
+            let done = false;
+            function finish() {
+              if (done) return;
+              done = true;
+              v.removeEventListener("seeked", finish);
+              resolve();
+            }
+            v.addEventListener("seeked", finish);
+            setTimeout(finish, 800);
+            try {
+              v.currentTime = 0;
+            } catch (e) {
+              finish();
+            }
+          });
+        }),
+      ).then(play);
     }
 
     function setMuted(muted) {

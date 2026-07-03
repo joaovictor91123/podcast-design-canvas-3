@@ -82,13 +82,73 @@
     return M ? M.listMoments(episode).filter((m) => m.type === "caption") : [];
   }
 
+  // Plain Levenshtein edit distance (single-row DP) between two strings.
+  function editDistance(a, b) {
+    const m = a.length, n = b.length;
+    if (!m) return n;
+    if (!n) return m;
+    const row = new Array(n + 1);
+    for (let j = 0; j <= n; j++) row[j] = j;
+    for (let i = 1; i <= m; i++) {
+      let diag = row[0];
+      row[0] = i;
+      for (let j = 1; j <= n; j++) {
+        const temp = row[j];
+        row[j] = a[i - 1] === b[j - 1] ? diag : 1 + Math.min(row[j], row[j - 1], diag);
+        diag = temp;
+      }
+    }
+    return row[n];
+  }
+
+  // How many typos to tolerate for a name of this length — generous enough to
+  // catch a real misspelling (one wrong/missing/swapped letter, two for longer
+  // names) without matching short, unrelated words. Names of 3 letters or
+  // fewer are never fuzzy-matched: the false-positive risk outweighs the value.
+  function maxTypos(len) {
+    if (len <= 3) return 0;
+    return len <= 6 ? 1 : 2;
+  }
+
+  // Replaces close misspellings of known speaker names — derived from the
+  // creator's own social links via app/episode.js's speakerName(), passed in
+  // by the caller as `names` — with their correct spelling. An exact match
+  // (any case) is left untouched; a word is corrected only when it is
+  // genuinely close (small edit distance relative to the name's length), so
+  // real, unrelated words in the transcript are never mangled.
+  function correctNames(text, names) {
+    const candidates = (names || []).filter((n) => n && String(n).trim());
+    if (!candidates.length) return text;
+    return String(text).replace(/[A-Za-z][A-Za-z'-]*/g, function (word) {
+      const lower = word.toLowerCase();
+      let best = null;
+      let bestDist = Infinity;
+      for (const name of candidates) {
+        const nameLower = String(name).toLowerCase();
+        if (lower === nameLower) return word; // already correctly spelled
+        const allowed = maxTypos(nameLower.length);
+        if (!allowed) continue;
+        if (Math.abs(lower.length - nameLower.length) > allowed) continue;
+        const dist = editDistance(lower, nameLower);
+        if (dist <= allowed && dist < bestDist) {
+          bestDist = dist;
+          best = name;
+        }
+      }
+      return best || word;
+    });
+  }
+
   // Import a WebVTT/SRT transcript as timed CAPTION MOMENTS on the episode.
   // Replaces any previously-imported caption moments (so re-importing is
   // idempotent) but leaves manual title/callout/image moments — and every other
   // piece of episode state (uploaded media, preset, social links) — untouched.
   // On invalid/empty input it changes NOTHING and returns a creator-readable
-  // reason, so a bad file can never wipe the creator's work.
-  function importCaptionMoments(episode, text) {
+  // reason, so a bad file can never wipe the creator's work. `correctionNames`
+  // (optional) is the creator's own derived speaker names — see
+  // app/episode.js's speakerName() — used to fix close misspellings of those
+  // names in the imported caption text before it is stored.
+  function importCaptionMoments(episode, text, correctionNames) {
     const parsed = parseTranscript(text);
     if (parsed.error || !parsed.cues.length) {
       return { ok: false, count: 0, error: parsed.error || "No caption cues were found." };
@@ -99,7 +159,8 @@
     captionMoments(episode).forEach((m) => M.removeMoment(episode, m.id));
     let count = 0;
     parsed.cues.forEach((c) => {
-      if (M.addMoment(episode, { type: "caption", text: c.text, start: c.start, end: c.end })) count++;
+      const cueText = correctNames(c.text, correctionNames);
+      if (M.addMoment(episode, { type: "caption", text: cueText, start: c.start, end: c.end })) count++;
     });
     return { ok: count > 0, count, error: count ? "" : "No usable caption cues were found." };
   }
@@ -108,6 +169,7 @@
     parseTimestamp,
     parseTranscript,
     captionMoments,
+    correctNames,
     importCaptionMoments,
   };
 })();
